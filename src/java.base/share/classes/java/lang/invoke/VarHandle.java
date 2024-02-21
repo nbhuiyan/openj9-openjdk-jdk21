@@ -25,6 +25,8 @@
 
 package java.lang.invoke;
 
+import jdk.internal.misc.Unsafe;
+
 import java.lang.constant.ClassDesc;
 import java.lang.constant.Constable;
 import java.lang.constant.ConstantDesc;
@@ -2173,15 +2175,32 @@ public abstract sealed class VarHandle implements Constable
     @Stable
     MethodHandle[] methodHandleTable;
 
+    private static final long METHOD_HANDLE_TABLE_OFFSET;
+
+    static {
+        METHOD_HANDLE_TABLE_OFFSET = UNSAFE.objectFieldOffset(VarHandle.class, "methodHandleTable");
+    }
+
     @ForceInline
     final MethodHandle getMethodHandle(int mode) {
         MethodHandle[] mhTable = methodHandleTable;
         if (mhTable == null) {
-            mhTable = methodHandleTable = new MethodHandle[AccessMode.COUNT];
+            mhTable = new MethodHandle[AccessMode.COUNT];
+            if (!UNSAFE.compareAndSetReference(this, METHOD_HANDLE_TABLE_OFFSET, null, mhTable)) {
+                // We lost the race. Use the winning table instead.
+                mhTable = methodHandleTable;
+                assert mhTable != null;
+            }
         }
         MethodHandle mh = mhTable[mode];
         if (mh == null) {
-            mh = mhTable[mode] = getMethodHandleUncached(mode);
+            mh = getMethodHandleUncached(mode);
+            long offset = Unsafe.ARRAY_OBJECT_BASE_OFFSET + Unsafe.ARRAY_OBJECT_INDEX_SCALE * mode;
+            if (!UNSAFE.compareAndSetReference(mhTable, offset, null, mh)) {
+                // We lost the race. Use the winning handle instead.
+                mh = mhTable[mode];
+                assert mh != null;
+            }
         }
         return mh;
     }
